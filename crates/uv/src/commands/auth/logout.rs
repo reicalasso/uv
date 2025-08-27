@@ -11,7 +11,6 @@ use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
 
 use crate::commands::auth::AuthBackend;
-use crate::commands::auth::login::is_pyx_url;
 use crate::settings::NetworkSettings;
 use crate::{commands::ExitStatus, printer::Printer};
 
@@ -26,11 +25,12 @@ pub(crate) async fn logout(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
-
-    if is_pyx_url(url) {
-        return pyx_logout(network_settings, printer).await;
+    let pyx_store = PyxTokenStore::from_settings()?;
+    if pyx_store.is_known_url(service.url()) {
+        return pyx_logout(&pyx_store, network_settings, printer).await;
     }
+
+    let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
 
     // TODO(zanieb): Use a shared abstraction across `login` and `logout`?
     let url = service.url().clone();
@@ -88,11 +88,10 @@ pub(crate) async fn logout(
 }
 
 async fn pyx_logout(
+    store: &PyxTokenStore,
     network_settings: &NetworkSettings,
     printer: Printer,
 ) -> anyhow::Result<ExitStatus> {
-    let store = PyxTokenStore::from_settings()?;
-
     // Initialize the client.
     let client = BaseClientBuilder::default()
         .connectivity(network_settings.connectivity)

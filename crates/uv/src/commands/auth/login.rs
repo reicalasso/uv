@@ -14,7 +14,6 @@ use uv_configuration::KeyringProviderType;
 use uv_distribution_types::IndexUrl;
 use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
-use uv_redacted::DisplaySafeUrl;
 
 use crate::commands::ExitStatus;
 use crate::commands::auth::AuthBackend;
@@ -32,6 +31,22 @@ pub(crate) async fn login(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+
+    let pyx_store = PyxTokenStore::from_settings()?;
+    if pyx_store.is_known_url(service.url()) {
+        let client = BaseClientBuilder::default()
+            .connectivity(network_settings.connectivity)
+            .native_tls(network_settings.native_tls)
+            .allow_insecure_host(network_settings.allow_insecure_host.clone())
+            .auth_integration(AuthIntegration::NoAuthMiddleware)
+            .build();
+
+        pyx_login_with_browser(&pyx_store, &client, &printer).await?;
+        writeln!(printer.stderr(), "Logged in to {}", service.url())?;
+        return Ok(ExitStatus::Success);
+    }
+
+
     let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
 
     // If the URL includes a known index URL suffix, strip it
@@ -41,20 +56,6 @@ pub(crate) async fn login(
         Some(root) => (Service::try_from(root.clone())?, root),
         None => (service, url),
     };
-
-    if is_pyx_url(&url) {
-        let store = PyxTokenStore::from_settings()?;
-        let client = BaseClientBuilder::default()
-            .connectivity(network_settings.connectivity)
-            .native_tls(network_settings.native_tls)
-            .allow_insecure_host(network_settings.allow_insecure_host.clone())
-            .auth_integration(AuthIntegration::NoAuthMiddleware)
-            .build();
-
-        pyx_login_with_browser(&store, &client, &printer).await?;
-        writeln!(printer.stderr(), "Logged in to {url}")?;
-        return Ok(ExitStatus::Success);
-    }
 
     // Extract credentials from URL if present
     let url_credentials = Credentials::from_url(&url);
@@ -149,13 +150,6 @@ pub(crate) async fn login(
         display_url.bold().cyan()
     )?;
     Ok(ExitStatus::Success)
-}
-
-pub(crate) fn is_pyx_url(url: &DisplaySafeUrl) -> bool {
-    let Some(domain) = url.domain() else {
-        return false;
-    };
-    domain == "pyx.dev" || domain.ends_with(".pyx.dev")
 }
 
 async fn pyx_login_with_browser(
