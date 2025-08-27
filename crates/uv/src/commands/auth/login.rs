@@ -7,7 +7,7 @@ use url::Url;
 use uuid::Uuid;
 
 use uv_auth::{
-    AccessToken, Credentials, OAuthTokens, Service, TextCredentialStore, TokenStore, Tokens,
+    AccessToken, Credentials, OAuthTokens, PyxTokenStore, Service, TextCredentialStore, Tokens,
 };
 use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_configuration::KeyringProviderType;
@@ -43,7 +43,7 @@ pub(crate) async fn login(
     };
 
     if is_pyx_url(&url) {
-        let store = TokenStore::from_settings()?;
+        let store = PyxTokenStore::from_settings()?;
         let client = BaseClientBuilder::default()
             .connectivity(network_settings.connectivity)
             .native_tls(network_settings.native_tls)
@@ -159,10 +159,10 @@ pub(crate) fn is_pyx_url(url: &DisplaySafeUrl) -> bool {
 }
 
 async fn pyx_login_with_browser(
-    store: &TokenStore,
+    store: &PyxTokenStore,
     client: &BaseClient,
     printer: &Printer,
-) -> anyhow::Result<AccessToken> {
+) -> Result<AccessToken> {
     // Generate a login code, like `67e55044-10b1-426f-9247-bb680e5fe0c8`.
     let cli_token = Uuid::new_v4();
     let url = {

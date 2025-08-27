@@ -10,7 +10,7 @@ pub use index::{AuthPolicy, Index, Indexes};
 pub use keyring::KeyringProvider;
 pub use middleware::AuthMiddleware;
 pub use pyx::{
-    AccessToken, DEFAULT_TOLERANCE_SECS, OAuthTokens, TokenStore, TokenStoreError, Tokens,
+    AccessToken, DEFAULT_TOLERANCE_SECS, OAuthTokens, PyxTokenStore, TokenStoreError, Tokens,
 };
 pub use realm::Realm;
 pub use service::{Service, ServiceParseError};

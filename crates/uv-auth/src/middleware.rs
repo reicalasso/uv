@@ -12,7 +12,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_warnings::owo_colors::OwoColorize;
 
 use crate::providers::HuggingFaceProvider;
-use crate::pyx::{AccessToken, DEFAULT_TOLERANCE_SECS, TokenStore};
+use crate::pyx::{AccessToken, DEFAULT_TOLERANCE_SECS, PyxTokenStore};
 use crate::{
     CREDENTIALS_CACHE, CredentialsCache, KeyringProvider,
     cache::FetchUrl,
@@ -134,7 +134,7 @@ pub struct AuthMiddleware {
     /// The base client to use for requests within the middleware.
     base_client: Option<ClientWithMiddleware>,
     /// The token store to use for persistent credentials.
-    token_store: Option<TokenStore>,
+    token_store: Option<PyxTokenStore>,
     /// Tokens to use for persistent credentials.
     token_state: Mutex<TokenState>,
 }
@@ -218,7 +218,7 @@ impl AuthMiddleware {
 
     /// Configure the [`TokenStore`] to use for persistent credentials.
     #[must_use]
-    pub fn with_token_store(mut self, token_store: TokenStore) -> Self {
+    pub fn with_token_store(mut self, token_store: PyxTokenStore) -> Self {
         self.token_store = Some(token_store);
         self
     }

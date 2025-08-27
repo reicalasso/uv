@@ -3,8 +3,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 
-use uv_auth::{Credentials, TextCredentialStore};
-use uv_auth::{Service, TokenStore};
+use uv_auth::{Credentials, PyxTokenStore, Service, TextCredentialStore};
 use uv_client::BaseClientBuilder;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_types::IndexUrl;
@@ -92,7 +91,7 @@ async fn pyx_logout(
     network_settings: &NetworkSettings,
     printer: Printer,
 ) -> anyhow::Result<ExitStatus> {
-    let store = TokenStore::from_settings()?;
+    let store = PyxTokenStore::from_settings()?;
 
     // Initialize the client.
     let client = BaseClientBuilder::default()
