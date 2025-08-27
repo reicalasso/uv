@@ -28,7 +28,7 @@ pub(crate) async fn logout(
 ) -> Result<ExitStatus> {
     let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
 
-    if is_pyx_url(&url) {
+    if is_pyx_url(url) {
         return pyx_logout(network_settings, printer).await;
     }
 
