@@ -9,12 +9,12 @@ pub use credentials::Credentials;
 pub use index::{AuthPolicy, Index, Indexes};
 pub use keyring::KeyringProvider;
 pub use middleware::AuthMiddleware;
-pub use service::{Service, ServiceParseError};
-pub use store::{AuthScheme, TextCredentialStore, TomlCredentialError};
-pub use realm::Realm;
 pub use pyx::{
     AccessToken, DEFAULT_TOLERANCE_SECS, OAuthTokens, TokenStore, TokenStoreError, Tokens,
 };
+pub use realm::Realm;
+pub use service::{Service, ServiceParseError};
+pub use store::{AuthScheme, TextCredentialStore, TomlCredentialError};
 
 mod cache;
 mod credentials;
@@ -22,10 +22,10 @@ mod index;
 mod keyring;
 mod middleware;
 mod providers;
+mod pyx;
 mod realm;
 mod service;
 mod store;
-mod pyx;
 
 // TODO(zanieb): Consider passing a cache explicitly throughout
 

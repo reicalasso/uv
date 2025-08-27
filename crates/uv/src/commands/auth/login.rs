@@ -6,7 +6,9 @@ use owo_colors::OwoColorize;
 use url::Url;
 use uuid::Uuid;
 
-use uv_auth::{Service, Credentials, TextCredentialStore, TokenStore, AccessToken, OAuthTokens, Tokens};
+use uv_auth::{
+    AccessToken, Credentials, OAuthTokens, Service, TextCredentialStore, TokenStore, Tokens,
+};
 use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_configuration::KeyringProviderType;
 use uv_distribution_types::IndexUrl;
@@ -14,8 +16,8 @@ use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
 use uv_redacted::DisplaySafeUrl;
 
-use crate::commands::auth::AuthBackend;
 use crate::commands::ExitStatus;
+use crate::commands::auth::AuthBackend;
 use crate::printer::Printer;
 use crate::settings::NetworkSettings;
 
@@ -149,7 +151,7 @@ pub(crate) async fn login(
     Ok(ExitStatus::Success)
 }
 
-fn is_pyx_url(url: &DisplaySafeUrl) -> bool {
+pub(crate) fn is_pyx_url(url: &DisplaySafeUrl) -> bool {
     let Some(domain) = url.domain() else {
         return false;
     };

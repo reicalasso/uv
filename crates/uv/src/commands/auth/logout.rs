@@ -3,14 +3,17 @@ use std::fmt::Write;
 use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 
-use uv_auth::Service;
 use uv_auth::{Credentials, TextCredentialStore};
+use uv_auth::{Service, TokenStore};
+use uv_client::BaseClientBuilder;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_types::IndexUrl;
 use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
 
 use crate::commands::auth::AuthBackend;
+use crate::commands::auth::login::is_pyx_url;
+use crate::settings::NetworkSettings;
 use crate::{commands::ExitStatus, printer::Printer};
 
 /// Logout from a service.
@@ -20,10 +23,15 @@ pub(crate) async fn logout(
     service: Service,
     username: Option<String>,
     keyring_provider: Option<KeyringProviderType>,
+    network_settings: &NetworkSettings,
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
     let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
+
+    if is_pyx_url(&url) {
+        return pyx_logout(network_settings, printer).await;
+    }
 
     // TODO(zanieb): Use a shared abstraction across `login` and `logout`?
     let url = service.url().clone();
@@ -75,6 +83,70 @@ pub(crate) async fn logout(
         printer.stderr(),
         "Removed credentials for {}",
         display_url.bold().cyan()
+    )?;
+
+    Ok(ExitStatus::Success)
+}
+
+async fn pyx_logout(
+    network_settings: &NetworkSettings,
+    printer: Printer,
+) -> anyhow::Result<ExitStatus> {
+    let store = TokenStore::from_settings()?;
+
+    // Initialize the client.
+    let client = BaseClientBuilder::default()
+        .connectivity(network_settings.connectivity)
+        .native_tls(network_settings.native_tls)
+        .allow_insecure_host(network_settings.allow_insecure_host.clone())
+        .build();
+
+    // Retrieve the token store.
+    let Some(tokens) = store.read().await? else {
+        writeln!(
+            printer.stderr(),
+            "{}",
+            format_args!("No credentials found for {}", store.api().bold().cyan())
+        )?;
+        return Ok(ExitStatus::Success);
+    };
+
+    // Add the token to the request.
+    let url = {
+        let mut url = store.api().clone();
+        url.set_path("auth/cli/logout");
+        url
+    };
+
+    // Build a basic request first, then authenticate it
+    let request = reqwest::Request::new(reqwest::Method::GET, url.into());
+    let request = Credentials::from(tokens).authenticate(request);
+
+    // Hit the logout endpoint using the client's execute method
+    let response = client.execute(request).await?;
+    match response.error_for_status_ref() {
+        Ok(..) => {}
+        Err(err) if matches!(err.status(), Some(reqwest::StatusCode::UNAUTHORIZED)) => {
+            tracing::debug!(
+                "Received 401 (Unauthorized) response from logout endpoint; removing tokens..."
+            );
+        }
+        Err(err) => {
+            return Err(err.into());
+        }
+    }
+
+    // Remove the tokens from the store.
+    match store.delete().await {
+        Ok(..) => {}
+        Err(err) if matches!(err.kind(), std::io::ErrorKind::NotFound) => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    writeln!(
+        printer.stderr(),
+        "{}",
+        format_args!("Logged out from {}", store.api().bold().cyan())
     )?;
 
     Ok(ExitStatus::Success)
