@@ -868,4 +868,7 @@ impl EnvVars {
 
     /// The pyx authentication token (e.g., `eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...`), as output by `uv auth token`.
     pub const PYX_AUTH_TOKEN: &'static str = "PYX_AUTH_TOKEN";
+
+    /// Specifies the directory where uv stores pyx credentials.
+    pub const PYX_CREDENTIALS_DIR: &'static str = "PYX_CREDENTIALS_DIR";
 }
