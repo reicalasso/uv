@@ -6,9 +6,7 @@ use owo_colors::OwoColorize;
 use url::Url;
 use uuid::Uuid;
 
-use uv_auth::{
-    AccessToken, Credentials, OAuthTokens, PyxTokenStore, Service, TextCredentialStore, Tokens,
-};
+use uv_auth::{AccessToken, Credentials, PyxOAuthTokens, PyxTokenStore, PyxTokens, Service, TextCredentialStore};
 use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_configuration::KeyringProviderType;
 use uv_distribution_types::IndexUrl;
@@ -197,8 +195,8 @@ async fn pyx_login_with_browser(
             }
             // Parse the credentials on success.
             _ if response.status().is_success() => {
-                let credentials = response.json::<OAuthTokens>().await?;
-                break Ok::<Tokens, anyhow::Error>(Tokens::OAuth(credentials));
+                let credentials = response.json::<PyxOAuthTokens>().await?;
+                break Ok::<PyxTokens, anyhow::Error>(PyxTokens::OAuth(credentials));
             }
             // Fail on any other status code (like a 500).
             status => {

@@ -14,7 +14,7 @@ use uv_small_str::SmallString;
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 
-use crate::{Credentials, Realm};
+use crate::{AccessToken, Credentials, Realm};
 
 /// Retrieve the pyx API key from the environment variable, or return `None`.
 fn read_pyx_api_key() -> Option<String> {
@@ -23,36 +23,9 @@ fn read_pyx_api_key() -> Option<String> {
 
 /// Retrieve the pyx authentication token (JWT) from the environment variable, or return `None`.
 fn read_pyx_auth_token() -> Option<AccessToken> {
-    std::env::var(EnvVars::PYX_AUTH_TOKEN).ok().map(AccessToken)
-}
-
-/// An encoded JWT access token.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
-pub struct AccessToken(String);
-
-impl AccessToken {
-    /// Return the [`AccessToken`] as a vector of bytes.
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.0.into_bytes()
-    }
-
-    /// Return the [`AccessToken`] as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AsRef<[u8]> for AccessToken {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl std::fmt::Display for AccessToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    std::env::var(EnvVars::PYX_AUTH_TOKEN)
+        .ok()
+        .map(AccessToken::from)
 }
 
 /// An access token with an accompanying refresh token.
@@ -60,45 +33,45 @@ impl std::fmt::Display for AccessToken {
 /// Refresh tokens are single-use tokens that can be exchanged for a renewed access token
 /// and a new refresh token.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct OAuthTokens {
+pub struct PyxOAuthTokens {
     pub access_token: AccessToken,
     pub refresh_token: String,
 }
 
 /// An access token with an accompanying API key.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct ApiKeyTokens {
+pub struct PyxApiKeyTokens {
     pub access_token: AccessToken,
     pub api_key: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub enum Tokens {
+pub enum PyxTokens {
     /// An access token with an accompanying refresh token.
     ///
     /// Refresh tokens are single-use tokens that can be exchanged for a renewed access token
     /// and a new refresh token.
-    OAuth(OAuthTokens),
+    OAuth(PyxOAuthTokens),
     /// An access token with an accompanying API key.
     ///
     /// API keys are long-lived tokens that can be exchanged for an access token.
-    ApiKey(ApiKeyTokens),
+    ApiKey(PyxApiKeyTokens),
 }
 
-impl From<Tokens> for AccessToken {
-    fn from(tokens: Tokens) -> Self {
+impl From<PyxTokens> for AccessToken {
+    fn from(tokens: PyxTokens) -> Self {
         match tokens {
-            Tokens::OAuth(OAuthTokens { access_token, .. }) => access_token,
-            Tokens::ApiKey(ApiKeyTokens { access_token, .. }) => access_token,
+            PyxTokens::OAuth(PyxOAuthTokens { access_token, .. }) => access_token,
+            PyxTokens::ApiKey(PyxApiKeyTokens { access_token, .. }) => access_token,
         }
     }
 }
 
-impl From<Tokens> for Credentials {
-    fn from(tokens: Tokens) -> Self {
+impl From<PyxTokens> for Credentials {
+    fn from(tokens: PyxTokens) -> Self {
         let access_token = match tokens {
-            Tokens::OAuth(OAuthTokens { access_token, .. }) => access_token,
-            Tokens::ApiKey(ApiKeyTokens { access_token, .. }) => access_token,
+            PyxTokens::OAuth(PyxOAuthTokens { access_token, .. }) => access_token,
+            PyxTokens::ApiKey(PyxApiKeyTokens { access_token, .. }) => access_token,
         };
         Self::from(access_token)
     }
@@ -197,7 +170,7 @@ impl PyxTokenStore {
         Ok(tokens.map(AccessToken::from))
     }
 
-    /// Initialize the [`Tokens`] from the store.
+    /// Initialize the [`PyxTokens`] from the store.
     ///
     /// If an access token is already present, it will be returned (and refreshed, if necessary).
     ///
@@ -207,7 +180,7 @@ impl PyxTokenStore {
         &self,
         client: &ClientWithMiddleware,
         tolerance_secs: u64,
-    ) -> Result<Option<Tokens>, TokenStoreError> {
+    ) -> Result<Option<PyxTokens>, TokenStoreError> {
         match self.read().await? {
             Some(tokens) => {
                 // Refresh the tokens if they are expired.
@@ -222,15 +195,15 @@ impl PyxTokenStore {
     }
 
     /// Write the tokens to the store.
-    pub async fn write(&self, tokens: &Tokens) -> Result<(), TokenStoreError> {
+    pub async fn write(&self, tokens: &PyxTokens) -> Result<(), TokenStoreError> {
         fs_err::tokio::create_dir_all(&self.path).await?;
         match tokens {
-            Tokens::OAuth(tokens) => {
+            PyxTokens::OAuth(tokens) => {
                 // Write OAuth tokens to a generic `tokens.json` file.
                 fs_err::tokio::write(self.path.join("tokens.json"), serde_json::to_vec(tokens)?)
                     .await?;
             }
-            Tokens::ApiKey(tokens) => {
+            PyxTokens::ApiKey(tokens) => {
                 // Write API key tokens to a file based on the API key.
                 let digest = uv_cache_key::cache_digest(&tokens.api_key);
                 fs_err::tokio::write(
@@ -251,15 +224,16 @@ impl PyxTokenStore {
     }
 
     /// Read the tokens from the store.
-    pub async fn read(&self) -> Result<Option<Tokens>, TokenStoreError> {
+    pub async fn read(&self) -> Result<Option<PyxTokens>, TokenStoreError> {
         // Retrieve the API URL from the environment variable, or error if unset.
         if let Some(api_key) = read_pyx_api_key() {
             // Read the API key tokens from a file based on the API key.
             let digest = uv_cache_key::cache_digest(&api_key);
             match fs_err::tokio::read(self.path.join(format!("{digest}.json"))).await {
                 Ok(data) => {
-                    let access_token = AccessToken(String::from_utf8(data).expect("Invalid UTF-8"));
-                    Ok(Some(Tokens::ApiKey(ApiKeyTokens {
+                    let access_token =
+                        AccessToken::from(String::from_utf8(data).expect("Invalid UTF-8"));
+                    Ok(Some(PyxTokens::ApiKey(PyxApiKeyTokens {
                         access_token,
                         api_key,
                     })))
@@ -270,8 +244,8 @@ impl PyxTokenStore {
         } else {
             match fs_err::tokio::read(self.path.join("tokens.json")).await {
                 Ok(data) => {
-                    let tokens: OAuthTokens = serde_json::from_slice(&data)?;
-                    Ok(Some(Tokens::OAuth(tokens)))
+                    let tokens: PyxOAuthTokens = serde_json::from_slice(&data)?;
+                    Ok(Some(PyxTokens::OAuth(tokens)))
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
                 Err(err) => Err(err.into()),
@@ -289,7 +263,7 @@ impl PyxTokenStore {
     async fn bootstrap(
         &self,
         client: &ClientWithMiddleware,
-    ) -> Result<Option<Tokens>, TokenStoreError> {
+    ) -> Result<Option<PyxTokens>, TokenStoreError> {
         #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
         struct Payload {
             access_token: AccessToken,
@@ -314,7 +288,7 @@ impl PyxTokenStore {
 
         let response = client.execute(request).await?;
         let Payload { access_token } = response.error_for_status()?.json::<Payload>().await?;
-        let tokens = Tokens::ApiKey(ApiKeyTokens {
+        let tokens = PyxTokens::ApiKey(PyxApiKeyTokens {
             access_token,
             api_key,
         });
@@ -331,14 +305,14 @@ impl PyxTokenStore {
     /// time.
     async fn refresh(
         &self,
-        tokens: Tokens,
+        tokens: PyxTokens,
         client: &ClientWithMiddleware,
         tolerance_secs: u64,
-    ) -> Result<Tokens, TokenStoreError> {
+    ) -> Result<PyxTokens, TokenStoreError> {
         // Decode the access token.
         let jwt = Jwt::decode(match &tokens {
-            Tokens::OAuth(OAuthTokens { access_token, .. }) => access_token.as_str(),
-            Tokens::ApiKey(ApiKeyTokens { access_token, .. }) => access_token.as_str(),
+            PyxTokens::OAuth(PyxOAuthTokens { access_token, .. }) => access_token.as_str(),
+            PyxTokens::ApiKey(PyxApiKeyTokens { access_token, .. }) => access_token.as_str(),
         })?;
 
         // If the access token is expired, refresh it.
@@ -374,7 +348,7 @@ impl PyxTokenStore {
         }
 
         let tokens = match tokens {
-            Tokens::OAuth(OAuthTokens { refresh_token, .. }) => {
+            PyxTokens::OAuth(PyxOAuthTokens { refresh_token, .. }) => {
                 // Parse the API URL.
                 let mut url = self.api.clone();
                 url.set_path("auth/cli/refresh");
@@ -386,10 +360,13 @@ impl PyxTokenStore {
                 *request.body_mut() = Some(body.to_string().into());
 
                 let response = client.execute(request).await?;
-                let tokens = response.error_for_status()?.json::<OAuthTokens>().await?;
-                Tokens::OAuth(tokens)
+                let tokens = response
+                    .error_for_status()?
+                    .json::<PyxOAuthTokens>()
+                    .await?;
+                PyxTokens::OAuth(tokens)
             }
-            Tokens::ApiKey(ApiKeyTokens { api_key, .. }) => {
+            PyxTokens::ApiKey(PyxApiKeyTokens { api_key, .. }) => {
                 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
                 struct Payload {
                     access_token: AccessToken,
@@ -408,7 +385,7 @@ impl PyxTokenStore {
                 let response = client.execute(request).await?;
                 let Payload { access_token } =
                     response.error_for_status()?.json::<Payload>().await?;
-                Tokens::ApiKey(ApiKeyTokens {
+                PyxTokens::ApiKey(PyxApiKeyTokens {
                     access_token,
                     api_key,
                 })

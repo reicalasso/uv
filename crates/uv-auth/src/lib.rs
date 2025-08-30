@@ -4,18 +4,18 @@ use tracing::trace;
 
 use uv_redacted::DisplaySafeUrl;
 
+pub use access_token::AccessToken;
 use cache::CredentialsCache;
 pub use credentials::Credentials;
 pub use index::{AuthPolicy, Index, Indexes};
 pub use keyring::KeyringProvider;
 pub use middleware::AuthMiddleware;
-pub use pyx::{
-    AccessToken, DEFAULT_TOLERANCE_SECS, OAuthTokens, PyxTokenStore, TokenStoreError, Tokens,
-};
+pub use pyx::{DEFAULT_TOLERANCE_SECS, PyxOAuthTokens, PyxTokenStore, PyxTokens, TokenStoreError};
 pub use realm::Realm;
 pub use service::{Service, ServiceParseError};
 pub use store::{AuthScheme, TextCredentialStore, TomlCredentialError};
 
+mod access_token;
 mod cache;
 mod credentials;
 mod index;

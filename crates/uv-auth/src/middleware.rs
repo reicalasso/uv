@@ -12,9 +12,9 @@ use uv_redacted::DisplaySafeUrl;
 use uv_warnings::owo_colors::OwoColorize;
 
 use crate::providers::HuggingFaceProvider;
-use crate::pyx::{AccessToken, DEFAULT_TOLERANCE_SECS, PyxTokenStore};
+use crate::pyx::{DEFAULT_TOLERANCE_SECS, PyxTokenStore};
 use crate::{
-    CREDENTIALS_CACHE, CredentialsCache, KeyringProvider,
+    AccessToken, CREDENTIALS_CACHE, CredentialsCache, KeyringProvider,
     cache::FetchUrl,
     credentials::{Credentials, Username},
     index::{AuthPolicy, Indexes},

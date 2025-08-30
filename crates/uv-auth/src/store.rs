@@ -74,8 +74,8 @@ pub enum BearerAuthError {
 // that scheme, but I want the username / password case to be easily accessible without
 // understanding authentication schemes. We should consider a better structure here, e.g., by
 // adding an internal type that we cast to after validation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TomlCredential {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct TomlCredential {
     /// The service URL for this credential.
     pub service: Service,
     /// The username to use. Only allowed with [`AuthScheme::Basic`].
@@ -130,7 +130,7 @@ impl TomlCredential {
     /// Convert to [`Credentials`].
     ///
     /// This method can panic if [`TomlCredential::validate`] has not been called.
-    pub fn into_credentials(self) -> Credentials {
+    pub(crate) fn into_credentials(self) -> Credentials {
         match self.scheme {
             AuthScheme::Basic => Credentials::Basic {
                 username: self.username,
@@ -143,7 +143,7 @@ impl TomlCredential {
     }
 
     /// Construct a [`TomlCredential`] for a service from [`Credentials`].
-    pub fn from_credentials(
+    pub(crate) fn from_credentials(
         service: Service,
         credentials: Credentials,
     ) -> Result<Self, TomlCredentialError> {
@@ -167,7 +167,7 @@ impl TomlCredential {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct TomlCredentials {
+pub(crate) struct TomlCredentials {
     /// Array of credential entries.
     #[serde(rename = "credential")]
     credentials: Vec<TomlCredential>,
