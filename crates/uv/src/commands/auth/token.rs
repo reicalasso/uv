@@ -1,13 +1,17 @@
 use std::fmt::Write;
 
 use anyhow::{Result, bail};
+use owo_colors::OwoColorize;
+use tracing::debug;
 
-use uv_auth::Credentials;
 use uv_auth::Service;
+use uv_auth::{Credentials, PyxTokenStore};
+use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_configuration::KeyringProviderType;
 use uv_preview::Preview;
 
-use crate::commands::auth::AuthBackend;
+use crate::commands::auth::{AuthBackend, login};
+use crate::settings::NetworkSettings;
 use crate::{commands::ExitStatus, printer::Printer};
 
 /// Show the token that will be used for a service.
@@ -15,9 +19,27 @@ pub(crate) async fn token(
     service: Service,
     username: Option<String>,
     keyring_provider: Option<KeyringProviderType>,
+    network_settings: &NetworkSettings,
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let pyx_store = PyxTokenStore::from_settings()?;
+    if pyx_store.is_known_domain(service.url()) {
+        if username.is_some() {
+            bail!("Cannot specify a username when logging in to pyx");
+        }
+
+        let client = BaseClientBuilder::default()
+            .connectivity(network_settings.connectivity)
+            .native_tls(network_settings.native_tls)
+            .allow_insecure_host(network_settings.allow_insecure_host.clone())
+            .auth_integration(AuthIntegration::NoAuthMiddleware)
+            .build();
+
+        pyx_refresh(&pyx_store, &client, printer).await?;
+        return Ok(ExitStatus::Success);
+    }
+
     let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
     let url = service.url();
 
@@ -66,4 +88,37 @@ pub(crate) async fn token(
 
     writeln!(printer.stdout(), "{password}")?;
     Ok(ExitStatus::Success)
+}
+
+/// Refresh the authentication tokens in the [`PyxTokenStore`], prompting for login if necessary.
+async fn pyx_refresh(store: &PyxTokenStore, client: &BaseClient, printer: Printer) -> Result<()> {
+    // Retrieve the token store.
+    let token = match store
+        .access_token(client.for_host(store.api()).raw_client(), 0)
+        .await
+    {
+        // If the tokens were successfully refreshed, return them.
+        Ok(Some(token)) => token,
+
+        // If the token store is empty, prompt for login.
+        Ok(None) => {
+            debug!("Token store is empty; prompting for login...");
+            login::pyx_login_with_browser(store, client, &printer).await?
+        }
+
+        // Similarly, if the refresh token expired, prompt for login.
+        Err(err) if err.is_unauthorized() => {
+            debug!(
+                "Received 401 (Unauthorized) response from refresh endpoint; prompting for login..."
+            );
+            login::pyx_login_with_browser(store, client, &printer).await?
+        }
+
+        Err(err) => {
+            return Err(err.into());
+        }
+    };
+
+    writeln!(printer.stdout(), "{}", token.cyan())?;
+    Ok(())
 }

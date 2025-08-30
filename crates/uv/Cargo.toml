@@ -53,7 +53,6 @@ uv-resolver = { workspace = true }
 uv-scripts = { workspace = true }
 uv-settings = { workspace = true, features = ["schemars"] }
 uv-shell = { workspace = true }
-uv-small-str = { workspace = true }
 uv-static = { workspace = true }
 uv-tool = { workspace = true }
 uv-torch = { workspace = true }
@@ -86,7 +85,7 @@ indoc = { workspace = true }
 itertools = { workspace = true }
 h2 = { workspace = true }
 miette = { workspace = true, features = ["fancy-no-backtrace"] }
-open = {workspace = true}
+open = { workspace = true }
 owo-colors = { workspace = true }
 petgraph = { workspace = true }
 regex = { workspace = true }

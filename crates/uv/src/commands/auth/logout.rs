@@ -26,7 +26,7 @@ pub(crate) async fn logout(
     preview: Preview,
 ) -> Result<ExitStatus> {
     let pyx_store = PyxTokenStore::from_settings()?;
-    if pyx_store.is_known_url(service.url()) {
+    if pyx_store.is_known_domain(service.url()) {
         return pyx_logout(&pyx_store, network_settings, printer).await;
     }
 
@@ -91,7 +91,7 @@ async fn pyx_logout(
     store: &PyxTokenStore,
     network_settings: &NetworkSettings,
     printer: Printer,
-) -> anyhow::Result<ExitStatus> {
+) -> Result<ExitStatus> {
     // Initialize the client.
     let client = BaseClientBuilder::default()
         .connectivity(network_settings.connectivity)

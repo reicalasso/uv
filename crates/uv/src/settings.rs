@@ -3530,13 +3530,18 @@ pub(crate) struct AuthTokenSettings {
 
     // Both CLI and configuration.
     pub(crate) keyring_provider: Option<KeyringProviderType>,
+    pub(crate) network_settings: NetworkSettings,
 }
 
 impl AuthTokenSettings {
     /// Resolve the [`AuthTokenSettings`] from the CLI and filesystem configuration.
-    pub(crate) fn resolve(args: AuthTokenArgs, filesystem: Option<FilesystemOptions>) -> Self {
+    pub(crate) fn resolve(
+        args: AuthTokenArgs,
+        global_args: &GlobalArgs,
+        filesystem: Option<&FilesystemOptions>,
+    ) -> Self {
         let Options { top_level, .. } = filesystem
-            .map(FilesystemOptions::into_options)
+            .map(|f| f.clone().into_options())
             .unwrap_or_default();
 
         let ResolverInstallerSchema {
@@ -3549,6 +3554,7 @@ impl AuthTokenSettings {
             service: args.service,
             username: args.username,
             keyring_provider,
+            network_settings: NetworkSettings::resolve(global_args, filesystem),
         }
     }
 }

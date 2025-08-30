@@ -6,7 +6,10 @@ use owo_colors::OwoColorize;
 use url::Url;
 use uuid::Uuid;
 
-use uv_auth::{AccessToken, Credentials, PyxOAuthTokens, PyxTokenStore, PyxTokens, Service, TextCredentialStore};
+use uv_auth::{
+    AccessToken, Credentials, PyxOAuthTokens, PyxTokenStore, PyxTokens, Service,
+    TextCredentialStore,
+};
 use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_configuration::KeyringProviderType;
 use uv_distribution_types::IndexUrl;
@@ -29,9 +32,15 @@ pub(crate) async fn login(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-
     let pyx_store = PyxTokenStore::from_settings()?;
-    if pyx_store.is_known_url(service.url()) {
+    if pyx_store.is_known_domain(service.url()) {
+        if username.is_some() {
+            bail!("Cannot specify a username when logging in to pyx");
+        }
+        if password.is_some() {
+            bail!("Cannot specify a password when logging in to pyx");
+        }
+
         let client = BaseClientBuilder::default()
             .connectivity(network_settings.connectivity)
             .native_tls(network_settings.native_tls)
@@ -40,10 +49,13 @@ pub(crate) async fn login(
             .build();
 
         pyx_login_with_browser(&pyx_store, &client, &printer).await?;
-        writeln!(printer.stderr(), "Logged in to {}", service.url())?;
+        writeln!(
+            printer.stderr(),
+            "Logged in to {}",
+            pyx_store.api().bold().cyan()
+        )?;
         return Ok(ExitStatus::Success);
     }
-
 
     let backend = AuthBackend::from_settings(keyring_provider.as_ref(), preview)?;
 
@@ -150,7 +162,7 @@ pub(crate) async fn login(
     Ok(ExitStatus::Success)
 }
 
-async fn pyx_login_with_browser(
+pub(crate) async fn pyx_login_with_browser(
     store: &PyxTokenStore,
     client: &BaseClient,
     printer: &Printer,

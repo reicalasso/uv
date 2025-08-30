@@ -1,9 +1,10 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use etcetera::BaseStrategy;
 use reqwest_middleware::ClientWithMiddleware;
 use tracing::debug;
 use url::Url;
@@ -18,13 +19,16 @@ use crate::{AccessToken, Credentials, Realm};
 
 /// Retrieve the pyx API key from the environment variable, or return `None`.
 fn read_pyx_api_key() -> Option<String> {
-    std::env::var(EnvVars::PYX_API_KEY).ok()
+    std::env::var(EnvVars::PYX_API_KEY)
+        .ok()
+        .or_else(|| std::env::var(EnvVars::UV_API_KEY).ok())
 }
 
 /// Retrieve the pyx authentication token (JWT) from the environment variable, or return `None`.
 fn read_pyx_auth_token() -> Option<AccessToken> {
     std::env::var(EnvVars::PYX_AUTH_TOKEN)
         .ok()
+        .or_else(|| std::env::var(EnvVars::UV_AUTH_TOKEN).ok())
         .map(AccessToken::from)
 }
 
@@ -88,12 +92,43 @@ impl From<AccessToken> for Credentials {
 /// The default tolerance for the access token expiration.
 pub const DEFAULT_TOLERANCE_SECS: u64 = 60 * 5;
 
+/// The root directory for the pyx token store.
+fn root_dir(api: &DisplaySafeUrl) -> Result<PathBuf, io::Error> {
+    // Store credentials in a subdirectory based on the API URL.
+    let digest = uv_cache_key::cache_digest(&CanonicalUrl::new(api));
+
+    // If the user explicitly set `PYX_CREDENTIALS_DIR`, use that.
+    if let Some(tool_dir) = std::env::var_os(EnvVars::PYX_CREDENTIALS_DIR) {
+        return std::path::absolute(tool_dir).map(|dir| dir.join(&digest));
+    }
+
+    // If the user has pyx credentials in their uv credentials directory, read them for
+    // backwards compatibility.
+    let credentials_dir = if let Some(tool_dir) = std::env::var_os(EnvVars::UV_CREDENTIALS_DIR) {
+        std::path::absolute(tool_dir)?
+    } else {
+        StateStore::from_settings(None)?.bucket(StateBucket::Credentials)
+    };
+    let credentials_dir = credentials_dir.join(&digest);
+    if credentials_dir.exists() {
+        return Ok(credentials_dir);
+    }
+
+    // Otherwise, use (e.g.) `~/.local/share/pyx`.
+    let Ok(xdg) = etcetera::base_strategy::choose_base_strategy() else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Could not determine user data directory",
+        ));
+    };
+
+    Ok(xdg.data_dir().join("pyx").join("credentials").join(&digest))
+}
+
 #[derive(Debug, Clone)]
 pub struct PyxTokenStore {
-    /// The root directory for the token store (e.g., `/Users/ferris/.local/share/uv/credentials`).
+    /// The root directory for the token store (e.g., `/Users/ferris/.local/share/pyx/credentials/3859a629b26fda96`).
     root: PathBuf,
-    /// The subdirectory for the token store (e.g., `/Users/ferris/.local/share/uv/credentials/3859a629b26fda96`).
-    path: PathBuf,
     /// The API URL for the token store (e.g., `https://api.pyx.dev`).
     api: DisplaySafeUrl,
     /// The CDN domain for the token store (e.g., `astralhosted.com`).
@@ -115,29 +150,10 @@ impl PyxTokenStore {
             .map(SmallString::from)
             .unwrap_or_else(|| SmallString::from(arcstr::literal!("astralhosted.com")));
 
-        // Read the credentials directory from the environment variable, or fallback to the default
-        // credentials directory.
-        let root = if let Some(tool_dir) = std::env::var_os(EnvVars::UV_CREDENTIALS_DIR) {
-            std::path::absolute(tool_dir)?
-        } else {
-            StateStore::from_settings(None)?.bucket(StateBucket::Credentials)
-        };
+        // Determine the root directory for the token store.
+        let root = root_dir(&api)?;
 
-        // Use a separate subdirectory for each API URL.
-        let digest = uv_cache_key::cache_digest(&CanonicalUrl::new(&api));
-        let path = root.join(digest);
-
-        Ok(Self {
-            root,
-            path,
-            api,
-            cdn,
-        })
-    }
-
-    /// Return the root directory for the token store.
-    pub fn root(&self) -> &Path {
-        &self.root
+        Ok(Self { root, api, cdn })
     }
 
     /// Return the API URL for the token store.
@@ -196,18 +212,18 @@ impl PyxTokenStore {
 
     /// Write the tokens to the store.
     pub async fn write(&self, tokens: &PyxTokens) -> Result<(), TokenStoreError> {
-        fs_err::tokio::create_dir_all(&self.path).await?;
+        fs_err::tokio::create_dir_all(&self.root).await?;
         match tokens {
             PyxTokens::OAuth(tokens) => {
                 // Write OAuth tokens to a generic `tokens.json` file.
-                fs_err::tokio::write(self.path.join("tokens.json"), serde_json::to_vec(tokens)?)
+                fs_err::tokio::write(self.root.join("tokens.json"), serde_json::to_vec(tokens)?)
                     .await?;
             }
             PyxTokens::ApiKey(tokens) => {
                 // Write API key tokens to a file based on the API key.
                 let digest = uv_cache_key::cache_digest(&tokens.api_key);
                 fs_err::tokio::write(
-                    self.path.join(format!("{digest}.json")),
+                    self.root.join(format!("{digest}.json")),
                     &tokens.access_token,
                 )
                 .await?;
@@ -220,7 +236,7 @@ impl PyxTokenStore {
     pub fn has_credentials(&self) -> bool {
         read_pyx_auth_token().is_some()
             || read_pyx_api_key().is_some()
-            || self.path.join("tokens.json").is_file()
+            || self.root.join("tokens.json").is_file()
     }
 
     /// Read the tokens from the store.
@@ -229,7 +245,7 @@ impl PyxTokenStore {
         if let Some(api_key) = read_pyx_api_key() {
             // Read the API key tokens from a file based on the API key.
             let digest = uv_cache_key::cache_digest(&api_key);
-            match fs_err::tokio::read(self.path.join(format!("{digest}.json"))).await {
+            match fs_err::tokio::read(self.root.join(format!("{digest}.json"))).await {
                 Ok(data) => {
                     let access_token =
                         AccessToken::from(String::from_utf8(data).expect("Invalid UTF-8"));
@@ -242,7 +258,7 @@ impl PyxTokenStore {
                 Err(err) => Err(err.into()),
             }
         } else {
-            match fs_err::tokio::read(self.path.join("tokens.json")).await {
+            match fs_err::tokio::read(self.root.join("tokens.json")).await {
                 Ok(data) => {
                     let tokens: PyxOAuthTokens = serde_json::from_slice(&data)?;
                     Ok(Some(PyxTokens::OAuth(tokens)))
@@ -255,7 +271,7 @@ impl PyxTokenStore {
 
     /// Remove the tokens from the store.
     pub async fn delete(&self) -> Result<(), io::Error> {
-        fs_err::tokio::remove_dir_all(&self.path).await?;
+        fs_err::tokio::remove_dir_all(&self.root).await?;
         Ok(())
     }
 
@@ -397,19 +413,18 @@ impl PyxTokenStore {
         Ok(tokens)
     }
 
-    /// Returns `true` if the given URL is known to this token store.
+    /// Returns `true` if the given URL is "known" to this token store (i.e., should be
+    /// authenticated using the store's tokens).
     pub fn is_known_url(&self, url: &Url) -> bool {
-        // Determine whether the URL matches the API realm.
-        if Realm::from(url) == Realm::from(&*self.api) {
-            return true;
-        }
+        is_known_url(url, &self.api, &self.cdn)
+    }
 
-        // Determine whether the URL matches the CDN domain (or a subdomain of it).
-        if matches_domain(url, &self.cdn) {
-            return true;
-        }
-
-        false
+    /// Returns `true` if the URL is on a "known" domain (i.e., the same domain as the API or CDN).
+    ///
+    /// Like [`is_known_url`](Self::is_known_url), but also returns `true` if the API is on the
+    /// subdomain of the URL (e.g., if the API is `api.pyx.dev` and the URL is `pyx.dev`).
+    pub fn is_known_domain(&self, url: &Url) -> bool {
+        is_known_domain(url, &self.api, &self.cdn)
     }
 }
 
@@ -485,6 +500,33 @@ pub enum JwtError {
     Serde(#[from] serde_json::Error),
 }
 
+fn is_known_url(url: &Url, api: &DisplaySafeUrl, cdn: &str) -> bool {
+    // Determine whether the URL matches the API realm.
+    if Realm::from(url) == Realm::from(&**api) {
+        return true;
+    }
+
+    // Determine whether the URL matches the CDN domain (or a subdomain of it).
+    //
+    // For example, if URL is on `files.astralhosted.com` and the CDN domain is
+    // `astralhosted.com`, consider it known.
+    if matches_domain(url, cdn) {
+        return true;
+    }
+
+    false
+}
+
+fn is_known_domain(url: &Url, api: &DisplaySafeUrl, cdn: &str) -> bool {
+    // Determine whether the URL matches the API domain.
+    if let Some(domain) = url.domain() {
+        if matches_domain(api, domain) {
+            return true;
+        }
+    }
+    is_known_url(url, api, cdn)
+}
+
 /// Returns `true` if the target URL is on the given domain.
 fn matches_domain(url: &Url, domain: &str) -> bool {
     url.domain().is_some_and(|subdomain| {
@@ -498,6 +540,116 @@ fn matches_domain(url: &Url, domain: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_known_url() {
+        let api_url = DisplaySafeUrl::from(Url::parse("https://api.pyx.dev").unwrap());
+        let cdn_domain = "astralhosted.com";
+
+        // Same realm as API.
+        assert!(is_known_url(
+            &Url::parse("https://api.pyx.dev/simple/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // Different path on same API domain
+        assert!(is_known_url(
+            &Url::parse("https://api.pyx.dev/v1/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // CDN domain.
+        assert!(is_known_url(
+            &Url::parse("https://astralhosted.com/packages/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // CDN subdomain.
+        assert!(is_known_url(
+            &Url::parse("https://files.astralhosted.com/packages/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // Unknown domain.
+        assert!(!is_known_url(
+            &Url::parse("https://pypi.org/simple/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // Similar but not matching domain.
+        assert!(!is_known_url(
+            &Url::parse("https://badastralhosted.com/packages/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+    }
+
+    #[test]
+    fn test_is_known_domain() {
+        let api_url = DisplaySafeUrl::from(Url::parse("https://api.pyx.dev").unwrap());
+        let cdn_domain = "astralhosted.com";
+
+        // Same realm as API.
+        assert!(is_known_domain(
+            &Url::parse("https://api.pyx.dev/simple/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // API super-domain.
+        assert!(is_known_domain(
+            &Url::parse("https://pyx.dev").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // API subdomain.
+        assert!(!is_known_domain(
+            &Url::parse("https://foo.api.pyx.dev").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // Different subdomain.
+        assert!(!is_known_domain(
+            &Url::parse("https://beta.pyx.dev/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // CDN domain.
+        assert!(is_known_domain(
+            &Url::parse("https://astralhosted.com/packages/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // CDN subdomain.
+        assert!(is_known_domain(
+            &Url::parse("https://files.astralhosted.com/packages/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // Unknown domain.
+        assert!(!is_known_domain(
+            &Url::parse("https://pypi.org/simple/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+
+        // Different TLD.
+        assert!(!is_known_domain(
+            &Url::parse("https://pyx.com/").unwrap(),
+            &api_url,
+            cdn_domain
+        ));
+    }
 
     #[test]
     fn test_matches_domain() {
