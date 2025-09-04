@@ -237,12 +237,21 @@ impl RequirementsTxt {
     /// are resolved against the directory of the containing `requirements.txt` file, to match
     /// `pip`'s behavior.
     pub async fn parse_inner(
-        content: &str,
-        working_dir: &Path,
-        requirements_dir: &Path,
-        client_builder: &BaseClientBuilder<'_>,
-        requirements_txt: &Path,
+    content: &str,
+    working_dir: &Path,
+    requirements_dir: &Path,
+    client_builder: &BaseClientBuilder<'_>,
+    requirements_txt: &Path,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
     ) -> Result<Self, RequirementsTxtParserError> {
+        // Circular include koruması
+        if !visited.insert(requirements_txt.to_path_buf()) {
+            return Err(RequirementsTxtParserError::Parser {
+                message: format!("Circular requirements.txt include detected: {}", requirements_txt.display()),
+                line: 0,
+                column: 0,
+            });
+        }
         let mut s = Scanner::new(content);
 
         let mut data = Self::default();
@@ -277,7 +286,7 @@ impl RequirementsTxt {
                             requirements_dir.join(filename.as_ref())
                         };
                     let sub_requirements =
-                        Box::pin(Self::parse(&sub_file, working_dir, client_builder))
+                        Box::pin(Self::parse_with_visited(&sub_file, working_dir, client_builder, visited))
                             .await
                             .map_err(|err| RequirementsTxtParserError::Subfile {
                                 source: Box::new(err),
@@ -332,7 +341,7 @@ impl RequirementsTxt {
                             requirements_dir.join(filename.as_ref())
                         };
                     let sub_constraints =
-                        Box::pin(Self::parse(&sub_file, working_dir, client_builder))
+                        Box::pin(Self::parse_with_visited(&sub_file, working_dir, client_builder, visited))
                             .await
                             .map_err(|err| RequirementsTxtParserError::Subfile {
                                 source: Box::new(err),
@@ -424,6 +433,20 @@ impl RequirementsTxt {
             }
         }
         Ok(data)
+    }
+
+    /// Wrapper: başlatıcı fonksiyon, visited setini oluşturur
+    pub async fn parse_with_visited(
+        requirements_txt: &Path,
+        working_dir: &Path,
+        client_builder: &BaseClientBuilder<'_>,
+        visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    ) -> Result<Self, RequirementsTxtParserError> {
+        let content = std::fs::read_to_string(requirements_txt)
+            .map_err(|e| RequirementsTxtParserError::Io(e))?;
+        let requirements_dir = requirements_txt.parent().unwrap_or_else(|| Path::new("."));
+        Self::parse_inner(&content, working_dir, requirements_dir, client_builder, requirements_txt, visited).await
+    }
     }
 
     /// Merge the data from a nested `requirements` file (`other`) into this one.
